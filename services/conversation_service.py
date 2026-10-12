@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import config
 from services.memory_service import merge_memory, render_memory
 from services.relationship_service import apply_affection_change, request_topic_penalty
 
@@ -13,9 +14,10 @@ def _profile_text(profile: dict) -> str:
 
 
 class ConversationService:
-    def __init__(self, store, ai_client):
+    def __init__(self, store, ai_client, usage=None):
         self.store = store
         self.ai = ai_client
+        self.usage = usage
 
     def _context(self, girl: dict, message_limit: int = 24, char_limit: int = 14000) -> list[dict[str, str]]:
         profile = girl["profile"]
@@ -62,10 +64,14 @@ class ConversationService:
         return reply
 
     def suggest_topic(self, girl_id: str) -> str:
+        if self.usage is not None and self.usage.today_topic_count() >= config.DAILY_TOPIC_LIMIT:
+            raise ValueError(f"今天的话题建议次数已用完（每日上限 {config.DAILY_TOPIC_LIMIT} 次），明天再来吧。")
         girl = self.store.get_girl(girl_id)
         if girl.get("status") != "active":
             raise ValueError("这段关系已经结束，不能继续请求话题。")
         self.store.update(girl_id, request_topic_penalty)
+        if self.usage is not None:
+            self.usage.record_topic_request()
         girl = self.store.get_girl(girl_id)
         prompt = self._context(girl)
         prompt[0]["content"] += "\n用户请求一个自然的话题切入建议。只给用户一个简短、开放、结合当前情境的建议，不要替用户发送。"

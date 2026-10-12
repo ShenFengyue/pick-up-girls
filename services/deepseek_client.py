@@ -6,6 +6,7 @@ import json
 import os
 from typing import Any
 
+import config
 from openai import APIConnectionError, APIStatusError, AuthenticationError, OpenAI, RateLimitError
 
 
@@ -14,25 +15,39 @@ class AIServiceError(RuntimeError):
 
 
 class DeepSeekClient:
-    BASE_URL = "https://api.deepseek.com"
-    MODEL = "deepseek-chat"
-
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, usage_tracker=None):
         key = (api_key if api_key is not None else os.getenv("DEEPSEEK_API_KEY", "")).strip()
-        self.client = OpenAI(api_key=key, base_url=self.BASE_URL, timeout=45, max_retries=1) if key else None
+        self.client = (
+            OpenAI(
+                api_key=key,
+                base_url=config.DEEPSEEK_BASE_URL,
+                timeout=config.DEEPSEEK_TIMEOUT,
+                max_retries=config.DEEPSEEK_MAX_RETRIES,
+            )
+            if key
+            else None
+        )
+        self.usage_tracker = usage_tracker
 
     def complete(self, messages: list[dict[str, str]], *, json_mode: bool = False) -> str:
         if self.client is None:
             raise AIServiceError("请在侧边栏保存 DeepSeek API Key，或临时选择使用本机环境变量。")
         try:
             response = self.client.chat.completions.create(
-                model=self.MODEL,
+                model=config.DEEPSEEK_MODEL,
                 messages=messages,
+                temperature=config.DEEPSEEK_TEMPERATURE,
                 response_format={"type": "json_object"} if json_mode else None,
             )
             content = response.choices[0].message.content
             if not content:
                 raise AIServiceError("模型返回了空内容，请重试。")
+            usage = getattr(response, "usage", None)
+            if usage is not None and self.usage_tracker is not None:
+                input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+                if input_tokens or output_tokens:
+                    self.usage_tracker.record_usage(input_tokens, output_tokens)
             return content
         except AuthenticationError as exc:
             raise AIServiceError("DeepSeek 鉴权失败，请检查 API Key。") from exc

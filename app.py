@@ -7,16 +7,19 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
+import config
 from services.character_service import CharacterService
 from services.conversation_service import ConversationService
 from services.credential_store import CredentialStoreError, delete_saved_api_key, get_saved_api_key, save_api_key
 from services.deepseek_client import AIServiceError, DeepSeekClient
 from services.memory_service import render_memory
 from storage.json_store import JsonStore
+from storage.usage_store import UsageStore
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 store = JsonStore(ROOT / "data" / "girls")
+usage_store = UsageStore(ROOT / "data" / "usage.json")
 
 st.set_page_config(page_title="把妹聊天模拟器", page_icon="◌", layout="wide")
 st.markdown("""
@@ -149,13 +152,32 @@ with st.sidebar:
                 if use_environment_key:
                     api_key = env_api_key
 
-        st.caption("接口：DeepSeek API · 模型 deepseek-chat。应用无法识别密钥所属账号。")
+        st.caption(f"接口：DeepSeek API · 模型 {config.DEEPSEEK_MODEL}。应用无法识别密钥所属账号。")
         if env_api_key and not saved_api_key:
             st.caption("检测到 Windows 环境变量密钥；默认不使用，需临时勾选才会调用。")
 
+    st.divider()
+    with st.expander("用量与成本", expanded=False):
+        session_totals = usage_store.session_totals()
+        month_totals = usage_store.month_totals()
+        st.caption(
+            f"本次会话：{session_totals['calls']} 次调用 · "
+            f"输入 {session_totals['input_tokens']:,} / 输出 {session_totals['output_tokens']:,} tokens"
+        )
+        st.caption(f"本次会话估算费用：{config.CURRENCY}{session_totals['cost']:.4f}")
+        st.caption(f"本月累计估算费用：{config.CURRENCY}{month_totals['cost']:.4f}")
+        if config.MONTHLY_BUDGET > 0:
+            spent = float(month_totals["cost"])
+            st.progress(min(1.0, spent / config.MONTHLY_BUDGET))
+            st.caption(f"月度预算：{config.CURRENCY}{config.MONTHLY_BUDGET:.0f}")
+            if spent >= config.MONTHLY_BUDGET:
+                st.warning(f"本月估算费用已超过预算 {config.CURRENCY}{config.MONTHLY_BUDGET:.0f}，请注意控制。")
+        remaining_topics = max(0, config.DAILY_TOPIC_LIMIT - usage_store.today_topic_count())
+        st.caption(f"今日话题建议剩余：{remaining_topics} 次")
+
 
 def ai_client():
-    return DeepSeekClient(api_key)
+    return DeepSeekClient(api_key, usage_tracker=usage_store)
 
 
 def navigate(page: str, girl_id: str | None = None):
@@ -300,7 +322,7 @@ def render_chat(girl):
             )
         if content:
             try:
-                conversation = ConversationService(store, ai_client())
+                conversation = ConversationService(store, ai_client(), usage_store)
                 user_message = conversation.save_user_message(girl["id"], content)
                 with submitted_message_slot.container():
                     render_chat_bubble("user", user_message["content"], len(girl.get("messages", [])))
@@ -315,7 +337,7 @@ def render_chat(girl):
             with col1:
                 if st.button("让 AI 帮我找话题（好感度 -1）", key=f"suggest_topic_{girl['id']}", width="stretch"):
                     try:
-                        suggestion = ConversationService(store, ai_client()).suggest_topic(girl["id"])
+                        suggestion = ConversationService(store, ai_client(), usage_store).suggest_topic(girl["id"])
                         st.session_state[f"topic_suggestion_{girl['id']}"] = suggestion
                         st.rerun()
                     except (AIServiceError, ValueError) as exc:
@@ -324,7 +346,7 @@ def render_chat(girl):
                 if st.button("结束聊天并复盘", key=f"end_chat_{girl['id']}", width="stretch"):
                     try:
                         with st.spinner("正在整理本次互动…"):
-                            review = ConversationService(store, ai_client()).end_chat_and_review(girl["id"])
+                            review = ConversationService(store, ai_client(), usage_store).end_chat_and_review(girl["id"])
                         st.session_state.recent_review = review
                         navigate("profile", girl["id"])
                         st.rerun()

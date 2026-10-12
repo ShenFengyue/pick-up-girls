@@ -8,4 +8,5 @@ venv/
 .streamlit/secrets.toml
 data/girls/*.json
 data/notes.json
+data/usage.json
 !data/girls/.gitkeep
