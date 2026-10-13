@@ -16,10 +16,5 @@ data/notes.json
 data/usage.json
 !data/girls/.gitkeep
 
-# 根目录下只跟踪 README 与 修改意见，其余 Markdown（个人笔记）不纳入版本库
-/*.md
-!README.md
-!修改意见.md
-
 # 个人笔记文件夹：整体忽略，里面放任何格式的文件都不会进版本库
 personal notes/
